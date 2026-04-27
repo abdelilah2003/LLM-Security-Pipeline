@@ -1,6 +1,5 @@
 huggingface_hub
 transformers
-llama-cpp-python
 ollama
 picklescan
 requests
