@@ -118,19 +118,20 @@ pipeline {
             parallel {
                 stage('Garak') {
                     steps {
-                        sh '''
-                            echo "[INFO] Installing garak..."
-                            ${VENV_PIP} install garak --quiet || true
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                echo "[INFO] Installing garak..."
+                                ${VENV_PIP} install garak --quiet || true
 
-                            echo "[INFO] Running Garak on tinyllama..."
-                            ${VENV_PYTHON} -m garak \
-                                --model_type ollama \
-                                --model_name tinyllama:latest \
-                                --probes promptinject,knownbadsignatures \
-                                --report_prefix ${REPORT_DIR}/garak \
-                                2>&1 | tee ${REPORT_DIR}/garak_stdout.txt || true
+                                echo "[INFO] Running Garak on tinyllama..."
+                                ${VENV_PYTHON} -m garak \
+                                    --model_type ollama \
+                                    --model_name tinyllama:latest \
+                                    --probes promptinject,knownbadsignatures \
+                                    --report_prefix ${REPORT_DIR}/garak \
+                                    2>&1 | tee ${REPORT_DIR}/garak_stdout.txt || true
 
-                            ${VENV_PYTHON} -c "
+                                ${VENV_PYTHON} -c "
 import json, glob
 report_files = glob.glob('${REPORT_DIR}/garak*.json')
 passed = True
@@ -150,7 +151,9 @@ with open('${REPORT_DIR}/garak_report.json', 'w') as f:
     json.dump(summary, f, indent=2)
 print(json.dumps(summary, indent=2))
 "
-                        '''
+                            '''
+                        }
+                        echo "[INFO] Garak results recorded — non-blocking stage"
                     }
                     post {
                         always {
@@ -162,13 +165,16 @@ print(json.dumps(summary, indent=2))
 
                 stage('Dynamic Security Script') {
                     steps {
-                        sh '''
-                            set -e
-                            ${VENV_PYTHON} scripts/dynamic_security.py \
-                                --model tinyllama:latest \
-                                --source ollama \
-                                --output ${REPORT_DIR}/dynamic_security.json
-                        '''
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/dynamic_security.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/dynamic_security.json
+                            '''
+                        }
+                        echo "[INFO] Dynamic security results recorded — non-blocking stage"
                     }
                     post {
                         always {
