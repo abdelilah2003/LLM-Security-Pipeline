@@ -9,3 +9,5 @@ reports/
 .idea/
 *.gguf
 *.bin
+
+# Allow demo malicious model for security pipeline negative test

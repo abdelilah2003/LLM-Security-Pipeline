@@ -1,0 +1,151 @@
+pipeline {
+    agent { label 'built-in' }
+
+    environment {
+        VENV_PYTHON     = "/opt/llm-pipeline/venv/bin/python3"
+        VENV_PIP        = "/opt/llm-pipeline/venv/bin/pip"
+        REPORT_DIR      = "reports/malicious-demo-${BUILD_NUMBER}"
+        MALICIOUS_FILE  = "Models/malicious_model.pkl"
+        PATH            = "/opt/llm-pipeline/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    }
+
+    options {
+        timestamps()
+        timeout(time: 10, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    stages {
+
+        stage('Setup') {
+            steps {
+                sh '''
+                    set -e
+                    mkdir -p ${REPORT_DIR}
+                    echo "════════════════════════════════════════════════════════════"
+                    echo " 🧪 LLM SECURITY PIPELINE — MALICIOUS MODEL DEMO"
+                    echo "════════════════════════════════════════════════════════════"
+                    echo " This pipeline demonstrates the static security gate"
+                    echo " catching a model containing a malicious pickle payload."
+                    echo "════════════════════════════════════════════════════════════"
+
+                    ${VENV_PIP} install modelscan --quiet
+
+                    [ -f ${MALICIOUS_FILE} ] || {
+                        echo "❌ Demo file ${MALICIOUS_FILE} not found in repo"
+                        exit 1
+                    }
+
+                    echo "[INFO] Demo file found:"
+                    ls -lh ${MALICIOUS_FILE}
+                '''
+            }
+        }
+
+        stage('[1] Static Security — Malicious Model Scan') {
+            steps {
+                sh '''
+                    set +e
+                    echo "════════════════════════════════════════════════════════════"
+                    echo " Running ModelScan on suspect file:"
+                    echo "   ${MALICIOUS_FILE}"
+                    echo "════════════════════════════════════════════════════════════"
+
+                    modelscan scan -p ${MALICIOUS_FILE} \
+                        > ${REPORT_DIR}/modelscan_output.txt 2>&1
+                    SCAN_EXIT=$?
+
+                    echo ""
+                    echo "──────────── ModelScan Output ────────────"
+                    cat ${REPORT_DIR}/modelscan_output.txt
+                    echo "──────────────────────────────────────────"
+                    echo ""
+                    echo "[INFO] modelscan exit code: $SCAN_EXIT"
+
+                    # Build a structured JSON report
+                    ${VENV_PYTHON} -c "
+import json, re
+with open('${REPORT_DIR}/modelscan_output.txt') as f:
+    out = f.read()
+
+threats = []
+for indicator in ['unsafe operator', 'critical', 'high severity', 'os.system', 'eval', 'exec']:
+    if indicator.lower() in out.lower():
+        threats.append(indicator)
+
+report = {
+    'stage': 'malicious_model_demo',
+    'file': '${MALICIOUS_FILE}',
+    'tool': 'modelscan',
+    'exit_code': $SCAN_EXIT,
+    'threats_detected': threats,
+    'verdict': 'REJECTED' if threats else 'ALLOWED',
+    'demo_success': bool(threats),
+}
+
+with open('${REPORT_DIR}/malicious_demo_report.json', 'w') as f:
+    json.dump(report, f, indent=2)
+
+print(json.dumps(report, indent=2))
+"
+
+                    # Detection logic — if threats present, FAIL the build (this is the demo!)
+                    if grep -qiE "unsafe operator|critical|high severity|os\\.system" \
+                       ${REPORT_DIR}/modelscan_output.txt; then
+                        echo "════════════════════════════════════════════════════════════"
+                        echo " ❌ MALICIOUS PAYLOAD DETECTED"
+                        echo "    The pickle file contains a dangerous operator."
+                        echo "    In production, this file would be QUARANTINED."
+                        echo "    Subsequent pipeline stages will NOT run."
+                        echo "════════════════════════════════════════════════════════════"
+                        exit 1
+                    fi
+
+                    echo "⚠️  ModelScan did not flag this file — investigate the payload."
+                    exit 0
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${REPORT_DIR}/*",
+                                     allowEmptyArchive: true
+                }
+                failure {
+                    echo "════════════════════════════════════════════════════════════"
+                    echo " ✅ DEMO SUCCESS"
+                    echo "    The pipeline correctly REJECTED a malicious artifact."
+                    echo "    Static security gate is working as designed."
+                    echo "════════════════════════════════════════════════════════════"
+                }
+            }
+        }
+
+        stage('[2] This stage should NEVER run') {
+            steps {
+                sh '''
+                    echo "❌ ERROR: If you see this message, the security gate FAILED."
+                    echo "   A malicious model passed through the static check."
+                    exit 1
+                '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "════════════════════════════════════════════════════════════"
+            echo " 🛡️  EXPECTED OUTCOME — Pipeline rejected a malicious artifact"
+            echo "    Demonstrates: Stage [1] acts as a hard release gate."
+            echo "    Build #${BUILD_NUMBER} fails BY DESIGN to prove the control."
+            echo "════════════════════════════════════════════════════════════"
+        }
+        success {
+            echo "════════════════════════════════════════════════════════════"
+            echo " ⚠️  UNEXPECTED OUTCOME — Pipeline did NOT detect the threat."
+            echo "    This means the demo file does not contain a payload"
+            echo "    that ModelScan recognizes as malicious."
+            echo "    Action: review the payload and update if needed."
+            echo "════════════════════════════════════════════════════════════"
+        }
+    }
+}
