@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+reports/
+.env
+*.log
+.vscode/
+.idea/
+*.gguf
+*.bin
