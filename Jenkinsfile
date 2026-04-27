@@ -13,6 +13,7 @@ pipeline {
         VENV_PYTHON   = "/opt/llm-pipeline/venv/bin/python3"
         VENV_PIP      = "/opt/llm-pipeline/venv/bin/pip"
         OLLAMA_HOST   = "http://127.0.0.1:11434"
+        OLLAMA_MODELS = "/usr/share/ollama/.ollama/models"
         PATH          = "/opt/llm-pipeline/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
 
@@ -79,6 +80,8 @@ pipeline {
                                 --model tinyllama:latest \
                                 --source ollama \
                                 --output ${REPORT_DIR}/quality.json
+                                
+                            echo "[INFO] Quality results recorded — non-blocking stage"    
                         '''
                     }
                     post {
@@ -96,6 +99,8 @@ pipeline {
                                 --model tinyllama:latest \
                                 --source ollama \
                                 --output ${REPORT_DIR}/bias.json
+                                
+                            echo "[INFO] Bias results recorded — non-blocking stage"    
                         '''
                     }
                     post {
