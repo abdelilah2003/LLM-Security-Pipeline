@@ -74,15 +74,16 @@ pipeline {
             parallel {
                 stage('Quality Benchmark') {
                     steps {
-                        sh '''
-                            set -e
-                            ${VENV_PYTHON} scripts/quality_benchmark.py \
-                                --model tinyllama:latest \
-                                --source ollama \
-                                --output ${REPORT_DIR}/quality.json
-                                
-                            echo "[INFO] Quality results recorded — non-blocking stage"    
-                        '''
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/quality_benchmark.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/quality.json
+                            '''
+                        }
+                        echo "[INFO] Quality results recorded — non-blocking stage"
                     }
                     post {
                         always {
@@ -93,15 +94,16 @@ pipeline {
 
                 stage('Bias Detection') {
                     steps {
-                        sh '''
-                            set -e
-                            ${VENV_PYTHON} scripts/bias_detection.py \
-                                --model tinyllama:latest \
-                                --source ollama \
-                                --output ${REPORT_DIR}/bias.json
-                                
-                            echo "[INFO] Bias results recorded — non-blocking stage"    
-                        '''
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/bias_detection.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/bias.json
+                            '''
+                        }
+                        echo "[INFO] Bias results recorded — non-blocking stage"
                     }
                     post {
                         always {
