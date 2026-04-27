@@ -24,7 +24,7 @@ pipeline {
 
     stages {
 
-        stage('📥 Checkout & Setup') {
+        stage('Checkout & Setup') {
             steps {
                 sh '''
                     set -e
@@ -46,7 +46,7 @@ pipeline {
             }
         }
 
-        stage('🔒 [1] Static Security') {
+        stage('[1] Static Security') {
             steps {
                 sh '''
                     set -e
@@ -69,7 +69,7 @@ pipeline {
             }
         }
 
-        stage('📊 [2] Quality & Bias Validation') {
+        stage('[2] Quality & Bias Validation') {
             parallel {
                 stage('Quality Benchmark') {
                     steps {
@@ -107,7 +107,7 @@ pipeline {
             }
         }
 
-        stage('🛡️ [3] Dynamic Security Testing') {
+        stage('[3] Dynamic Security Testing') {
             parallel {
                 stage('Garak') {
                     steps {
@@ -172,7 +172,7 @@ print(json.dumps(summary, indent=2))
             }
         }
 
-        stage('✅ [4] Trust & Release') {
+        stage('[4] Trust & Release') {
             steps {
                 sh '''
                     set -e
