@@ -7,7 +7,7 @@ pipeline {
 
     environment {
         MODEL_SOURCE  = "ollama"
-        MODEL_NAME    = "llama3.2:3b"
+        MODEL_NAME    = "tinyllama:latest"
         REPORT_DIR    = "reports/${BUILD_NUMBER}"
         VENV_DIR      = "/opt/llm-pipeline/venv"
         VENV_PYTHON   = "/opt/llm-pipeline/venv/bin/python3"
@@ -42,7 +42,7 @@ pipeline {
                     echo "[INFO] Verifying tinyllama is available via Ollama API..."
                     curl -s ${OLLAMA_HOST}/api/tags | grep -q "tinyllama" \
                         || (echo "❌ tinyllama not found in Ollama" && exit 1)
-                    echo "✅ llama3.2:3b ready"
+                    echo "✅ tinyllama:latest ready"
                 '''
             }
         }
@@ -55,7 +55,7 @@ pipeline {
                     ${VENV_PIP} install modelscan --quiet
 
                     ${VENV_PYTHON} scripts/static_security.py \
-                        --model llama3.2:3b \
+                        --model tinyllama:latest \
                         --source ollama \
                         --output ${REPORT_DIR}/static_security.json
                 '''
@@ -78,7 +78,7 @@ pipeline {
                             sh '''
                                 set -e
                                 ${VENV_PYTHON} scripts/quality_benchmark.py \
-                                    --model llama3.2:3b \
+                                    --model tinyllama:latest \
                                     --source ollama \
                                     --output ${REPORT_DIR}/quality.json
                             '''
@@ -98,7 +98,7 @@ pipeline {
                             sh '''
                                 set -e
                                 ${VENV_PYTHON} scripts/bias_detection.py \
-                                    --model llama3.2:3b \
+                                    --model tinyllama:latest \
                                     --source ollama \
                                     --output ${REPORT_DIR}/bias.json
                             '''
@@ -126,7 +126,7 @@ pipeline {
                                 echo "[INFO] Running Garak on tinyllama..."
                                 ${VENV_PYTHON} -m garak \
                                     --model_type ollama \
-                                    --model_name llama3.2:3b \
+                                    --model_name tinyllama:latest \
                                     --probes promptinject,knownbadsignatures \
                                     --report_prefix ${REPORT_DIR}/garak \
                                     2>&1 | tee ${REPORT_DIR}/garak_stdout.txt || true
@@ -135,7 +135,7 @@ pipeline {
 import json, glob
 report_files = glob.glob('${REPORT_DIR}/garak*.json')
 passed = True
-summary = {'tool': 'garak', 'model': 'llama3.2:3b', 'files_found': report_files}
+summary = {'tool': 'garak', 'model': 'tinyllama:latest', 'files_found': report_files}
 for f in report_files:
     try:
         with open(f) as fp:
@@ -169,7 +169,7 @@ print(json.dumps(summary, indent=2))
                             sh '''
                                 set -e
                                 ${VENV_PYTHON} scripts/dynamic_security.py \
-                                    --model llama3.2:3b \
+                                    --model tinyllama:latest \
                                     --source ollama \
                                     --output ${REPORT_DIR}/dynamic_security.json
                             '''
@@ -191,7 +191,7 @@ print(json.dumps(summary, indent=2))
                     set -e
                     ${VENV_PYTHON} scripts/trust_release.py \
                         --report-dir ${REPORT_DIR} \
-                        --model llama3.2:3b \
+                        --model tinyllama:latest \
                         --source ollama \
                         --output ${REPORT_DIR}/final_report.json
                 '''

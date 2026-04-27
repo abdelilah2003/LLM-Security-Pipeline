@@ -1,151 +1,256 @@
 pipeline {
-    agent { label 'built-in' }
+    agent {
+        node {
+            label 'built-in'
+        }
+    }
 
     environment {
-        VENV_PYTHON     = "/opt/llm-pipeline/venv/bin/python3"
-        VENV_PIP        = "/opt/llm-pipeline/venv/bin/pip"
-        REPORT_DIR      = "reports/malicious-demo-${BUILD_NUMBER}"
-        MALICIOUS_FILE  = "Models/malicious_model.pkl"
-        PATH            = "/opt/llm-pipeline/venv/bin:/usr/local/bin:/usr/bin:/bin"
+        MODEL_SOURCE   = "ollama"
+        MODEL_NAME     = "tinyllama:latest"
+        REPORT_DIR     = "reports/${BUILD_NUMBER}"
+        VENV_DIR       = "/opt/llm-pipeline/venv"
+        VENV_PYTHON    = "/opt/llm-pipeline/venv/bin/python3"
+        VENV_PIP       = "/opt/llm-pipeline/venv/bin/pip"
+        OLLAMA_HOST    = "http://127.0.0.1:11434"
+        OLLAMA_MODELS  = "/usr/share/ollama/.ollama/models"
+        SCAN_TARGETS   = "Models/malicious_model.pkl"
+        PATH           = "/opt/llm-pipeline/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
 
     options {
         timestamps()
-        timeout(time: 10, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
     }
 
     stages {
 
-        stage('Setup') {
+        stage('Checkout & Setup') {
             steps {
                 sh '''
                     set -e
                     mkdir -p ${REPORT_DIR}
-                    echo "════════════════════════════════════════════════════════════"
-                    echo " 🧪 LLM SECURITY PIPELINE — MALICIOUS MODEL DEMO"
-                    echo "════════════════════════════════════════════════════════════"
-                    echo " This pipeline demonstrates the static security gate"
-                    echo " catching a model containing a malicious pickle payload."
-                    echo "════════════════════════════════════════════════════════════"
+                    echo "[INFO] Workspace : $(pwd)"
+                    echo "[INFO] Build     : #${BUILD_NUMBER}"
+                    echo "[INFO] Python    : $(${VENV_PYTHON} --version)"
 
-                    ${VENV_PIP} install modelscan --quiet
+                    echo "[INFO] Installing project dependencies..."
+                    if [ -f requirements.txt ]; then
+                        ${VENV_PIP} install -r requirements.txt --quiet
+                    fi
 
-                    [ -f ${MALICIOUS_FILE} ] || {
-                        echo "❌ Demo file ${MALICIOUS_FILE} not found in repo"
-                        exit 1
-                    }
-
-                    echo "[INFO] Demo file found:"
-                    ls -lh ${MALICIOUS_FILE}
+                    echo "[INFO] Verifying tinyllama is available via Ollama API..."
+                    curl -s ${OLLAMA_HOST}/api/tags | grep -q "tinyllama" \
+                        || (echo "❌ tinyllama not found in Ollama" && exit 1)
+                    echo "✅ tinyllama:latest ready"
                 '''
             }
         }
 
-        stage('[1] Static Security — Malicious Model Scan') {
+        stage('[1] Static Security') {
             steps {
                 sh '''
-                    set +e
-                    echo "════════════════════════════════════════════════════════════"
-                    echo " Running ModelScan on suspect file:"
-                    echo "   ${MALICIOUS_FILE}"
-                    echo "════════════════════════════════════════════════════════════"
+                    set -e
+                    echo "[INFO] Installing modelscan..."
+                    ${VENV_PIP} install modelscan --quiet
 
-                    modelscan scan -p ${MALICIOUS_FILE} \
-                        > ${REPORT_DIR}/modelscan_output.txt 2>&1
-                    SCAN_EXIT=$?
+                    echo "[INFO] Static security scan targets:"
+                    echo "   - Ollama model store"
+                    echo "   - Additional artifacts: ${SCAN_TARGETS}"
 
-                    echo ""
-                    echo "──────────── ModelScan Output ────────────"
-                    cat ${REPORT_DIR}/modelscan_output.txt
-                    echo "──────────────────────────────────────────"
-                    echo ""
-                    echo "[INFO] modelscan exit code: $SCAN_EXIT"
+                    # Run modelscan on each declared artifact
+                    SCAN_FAILED=0
+                    for target in $(echo ${SCAN_TARGETS} | tr ',' ' '); do
+                        echo ""
+                        echo "──────────── Scanning: $target ────────────"
 
-                    # Build a structured JSON report
-                    ${VENV_PYTHON} -c "
-import json, re
-with open('${REPORT_DIR}/modelscan_output.txt') as f:
-    out = f.read()
+                        if [ ! -e "$target" ]; then
+                            echo "[WARN] Target not found, skipping: $target"
+                            continue
+                        fi
 
-threats = []
-for indicator in ['unsafe operator', 'critical', 'high severity', 'os.system', 'eval', 'exec']:
-    if indicator.lower() in out.lower():
-        threats.append(indicator)
+                        modelscan scan -p "$target" \
+                            | tee -a ${REPORT_DIR}/modelscan_artifacts.txt
 
-report = {
-    'stage': 'malicious_model_demo',
-    'file': '${MALICIOUS_FILE}',
-    'tool': 'modelscan',
-    'exit_code': $SCAN_EXIT,
-    'threats_detected': threats,
-    'verdict': 'REJECTED' if threats else 'ALLOWED',
-    'demo_success': bool(threats),
-}
+                        if grep -qiE "CRITICAL: [1-9]|HIGH: [1-9]|unsafe operator" \
+                           ${REPORT_DIR}/modelscan_artifacts.txt; then
+                            SCAN_FAILED=1
+                        fi
+                    done
 
-with open('${REPORT_DIR}/malicious_demo_report.json', 'w') as f:
-    json.dump(report, f, indent=2)
+                    # Run the existing static security script for the Ollama model
+                    ${VENV_PYTHON} scripts/static_security.py \
+                        --model tinyllama:latest \
+                        --source ollama \
+                        --output ${REPORT_DIR}/static_security.json
 
-print(json.dumps(report, indent=2))
-"
-
-                    # Detection logic — if threats present, FAIL the build (this is the demo!)
-                    if grep -qiE "unsafe operator|critical|high severity|os\\.system" \
-                       ${REPORT_DIR}/modelscan_output.txt; then
-                        echo "════════════════════════════════════════════════════════════"
-                        echo " ❌ MALICIOUS PAYLOAD DETECTED"
-                        echo "    The pickle file contains a dangerous operator."
-                        echo "    In production, this file would be QUARANTINED."
-                        echo "    Subsequent pipeline stages will NOT run."
-                        echo "════════════════════════════════════════════════════════════"
+                    if [ "$SCAN_FAILED" -eq 1 ]; then
+                        echo ""
+                        echo "[FAIL] Critical threats detected in scanned artifacts."
+                        echo "       The pipeline will halt before any model is loaded or tested."
                         exit 1
                     fi
 
-                    echo "⚠️  ModelScan did not flag this file — investigate the payload."
-                    exit 0
+                    echo "[OK] All static security checks passed."
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: "${REPORT_DIR}/*",
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${REPORT_DIR}/static_security.json", allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${REPORT_DIR}/modelscan_artifacts.txt", allowEmptyArchive: true
                 }
                 failure {
-                    echo "════════════════════════════════════════════════════════════"
-                    echo " ✅ DEMO SUCCESS"
-                    echo "    The pipeline correctly REJECTED a malicious artifact."
-                    echo "    Static security gate is working as designed."
-                    echo "════════════════════════════════════════════════════════════"
+                    error("❌ [1] Static Security failed — pipeline stopped")
                 }
             }
         }
 
-        stage('[2] This stage should NEVER run') {
+        stage('[2] Quality & Bias Validation') {
+            parallel {
+                stage('Quality Benchmark') {
+                    steps {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/quality_benchmark.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/quality.json
+                            '''
+                        }
+                        echo "[INFO] Quality results recorded — non-blocking stage"
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: "${REPORT_DIR}/quality.json", allowEmptyArchive: true
+                        }
+                    }
+                }
+
+                stage('Bias Detection') {
+                    steps {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/bias_detection.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/bias.json
+                            '''
+                        }
+                        echo "[INFO] Bias results recorded — non-blocking stage"
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: "${REPORT_DIR}/bias.json", allowEmptyArchive: true
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('[3] Dynamic Security Testing') {
+            parallel {
+                stage('Garak') {
+                    steps {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                echo "[INFO] Installing garak..."
+                                ${VENV_PIP} install garak --quiet || true
+
+                                echo "[INFO] Running Garak on tinyllama..."
+                                ${VENV_PYTHON} -m garak \
+                                    --model_type ollama \
+                                    --model_name tinyllama:latest \
+                                    --probes promptinject,knownbadsignatures \
+                                    --report_prefix ${REPORT_DIR}/garak \
+                                    2>&1 | tee ${REPORT_DIR}/garak_stdout.txt || true
+
+                                ${VENV_PYTHON} -c "
+import json, glob
+report_files = glob.glob('${REPORT_DIR}/garak*.json')
+passed = True
+summary = {'tool': 'garak', 'model': 'tinyllama:latest', 'files_found': report_files}
+for f in report_files:
+    try:
+        with open(f) as fp:
+            data = json.load(fp)
+            if isinstance(data, list):
+                for entry in data:
+                    if entry.get('status') == 'failed':
+                        passed = False
+    except Exception:
+        pass
+summary['passed'] = passed
+with open('${REPORT_DIR}/garak_report.json', 'w') as f:
+    json.dump(summary, f, indent=2)
+print(json.dumps(summary, indent=2))
+"
+                            '''
+                        }
+                        echo "[INFO] Garak results recorded — non-blocking stage"
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: "${REPORT_DIR}/garak*.json", allowEmptyArchive: true
+                            archiveArtifacts artifacts: "${REPORT_DIR}/garak_stdout.txt", allowEmptyArchive: true
+                        }
+                    }
+                }
+
+                stage('Dynamic Security Script') {
+                    steps {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                ${VENV_PYTHON} scripts/dynamic_security.py \
+                                    --model tinyllama:latest \
+                                    --source ollama \
+                                    --output ${REPORT_DIR}/dynamic_security.json
+                            '''
+                        }
+                        echo "[INFO] Dynamic security results recorded — non-blocking stage"
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: "${REPORT_DIR}/dynamic_security.json", allowEmptyArchive: true
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('[4] Trust & Release') {
             steps {
                 sh '''
-                    echo "❌ ERROR: If you see this message, the security gate FAILED."
-                    echo "   A malicious model passed through the static check."
-                    exit 1
+                    set -e
+                    ${VENV_PYTHON} scripts/trust_release.py \
+                        --report-dir ${REPORT_DIR} \
+                        --model tinyllama:latest \
+                        --source ollama \
+                        --output ${REPORT_DIR}/final_report.json
                 '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${REPORT_DIR}/final_report.json", allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${REPORT_DIR}/final_report.html", allowEmptyArchive: true
+                }
+                success {
+                    echo "✅ Model tinyllama validated successfully!"
+                }
+                failure {
+                    echo "❌ tinyllama rejected — trust score insufficient"
+                }
             }
         }
     }
 
     post {
-        failure {
-            echo "════════════════════════════════════════════════════════════"
-            echo " 🛡️  EXPECTED OUTCOME — Pipeline rejected a malicious artifact"
-            echo "    Demonstrates: Stage [1] acts as a hard release gate."
-            echo "    Build #${BUILD_NUMBER} fails BY DESIGN to prove the control."
-            echo "════════════════════════════════════════════════════════════"
-        }
-        success {
-            echo "════════════════════════════════════════════════════════════"
-            echo " ⚠️  UNEXPECTED OUTCOME — Pipeline did NOT detect the threat."
-            echo "    This means the demo file does not contain a payload"
-            echo "    that ModelScan recognizes as malicious."
-            echo "    Action: review the payload and update if needed."
-            echo "════════════════════════════════════════════════════════════"
+        always {
+            echo "📊 Pipeline finished — Build #${BUILD_NUMBER}"
+            echo "📁 Reports archived as Jenkins artifacts."
         }
     }
 }
